@@ -56,3 +56,17 @@ spec:
         ]
       runAfter:
         - clone
+
+    - name: tests
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace
+      taskRef:
+        name: nose
+      params:
+      - name: args
+        value: -v --with-spec --spec-color
+      - name: database_uri
+        value: sqlite:///test.db
+      runAfter:
+        - clone
