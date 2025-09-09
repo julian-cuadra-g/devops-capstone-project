@@ -1,12 +1,6 @@
-#
-# This pipeline needs the following tasks from Tekton Hub
-#   - git-clone
-#   - flake8
-#
----
 apiVersion: tekton.dev/v1beta1
 kind: Pipeline
-metadata:  
+metadata: 
   name: cd-pipeline
 spec:
   workspaces:
@@ -15,24 +9,57 @@ spec:
     - name: repo-url
     - name: branch
       default: main
+    - name: build-image
   tasks:
-    - name: init
-      workspaces:
-        - name: source
-          workspace: pipeline-workspace          
-      taskRef:
-        name: cleanup
-
+    # Task de clonación usando git-clone ClusterTask
     - name: clone
       workspaces:
-        - name: output
-          workspace: pipeline-workspace          
+        - name: output  # ← Este es el workspace que git-clone espera
+          workspace: pipeline-workspace         
       taskRef:
         name: git-clone
+        kind: ClusterTask  # ← ¡Importante! Usar ClusterTask
       params:
-      - name: url
-        value: $(params.repo-url)
-      - name: revision
-        value: $(params.branch)
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.branch)
+
+    # Task de build usando buildah ClusterTask
+    - name: build
+      workspaces:
+        - name: source  # ← buildah espera workspace llamado 'source'
+          workspace: pipeline-workspace
+      taskRef:
+        name: buildah
+        kind: ClusterTask  # ← ¡Importante! Usar ClusterTask
+      params:
+        - name: IMAGE
+          value: $(params.build-image)
+        - name: DOCKERFILE
+          value: "Dockerfile"  # ← Asegurar que usa el Dockerfile correcto
       runAfter:
-        - init
+        - clone
+
+    # Task de deploy usando openshift-client ClusterTask
+    - name: deploy
+      workspaces:
+        - name: manifest-dir  # ← openshift-client espera este workspace
+          workspace: pipeline-workspace
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask  # ← ¡Importante! Usar ClusterTask
+      params:
+        - name: SCRIPT
+          value: |
+            echo "Updating manifest with image: $(params.build-image)"
+            cd deploy
+            sed -i "s|IMAGE_NAME_HERE|$(params.build-image)|g" deployment.yaml
+            echo "Deploying to OpenShift..."
+            oc apply -f .
+            echo "Waiting for deployment to complete..."
+            oc rollout status deployment/accounts
+            echo "Current pods:"
+            oc get pods -l app=accounts
+      runAfter:
+        - build
