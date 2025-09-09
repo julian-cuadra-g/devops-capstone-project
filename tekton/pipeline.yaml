@@ -36,3 +36,37 @@ spec:
         value: $(params.branch)
       runAfter:
         - init
+
+    - name: lint
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace          
+      taskRef:
+        name: flake8
+      params:
+      - name: image
+        value: "python:3.9-slim"
+      - name: args
+        value: [
+          "--count",
+          "--max-complexity=10",
+          "--max-line-length=127",
+          "--ignore=E501,E402,W293,E303,W292",
+          "--statistics"
+        ]
+      runAfter:
+        - clone
+
+    - name: tests
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace
+      taskRef:
+        name: nose
+      params:
+      - name: args
+        value: -v --with-spec --spec-color
+      - name: database_uri
+        value: sqlite:///test.db
+      runAfter:
+        - clone
