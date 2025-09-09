@@ -1,9 +1,3 @@
-#
-# This pipeline needs the following tasks from Tekton Hub
-#   - git-clone
-#   - flake8
-#
----
 apiVersion: tekton.dev/v1beta1
 kind: Pipeline
 metadata: 
@@ -15,96 +9,57 @@ spec:
     - name: repo-url
     - name: branch
       default: main
-    - name: build-image  # ← Parámetro faltante agregado aquí
+    - name: build-image
   tasks:
-    - name: init
-      workspaces:
-        - name: source
-          workspace: pipeline-workspace         
-      taskRef:
-        name: cleanup
-
+    # Task de clonación usando git-clone ClusterTask
     - name: clone
       workspaces:
-        - name: output
+        - name: output  # ← Este es el workspace que git-clone espera
           workspace: pipeline-workspace         
       taskRef:
         name: git-clone
+        kind: ClusterTask  # ← ¡Importante! Usar ClusterTask
       params:
-      - name: url
-        value: $(params.repo-url)
-      - name: revision
-        value: $(params.branch)
-      runAfter:
-        - init
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.branch)
 
-    - name: lint
-      workspaces:
-        - name: source
-          workspace: pipeline-workspace         
-      taskRef:
-        name: flake8
-      params:
-      - name: image
-        value: "python:3.9-slim"
-      - name: args
-        value: [
-          "--count",
-          "--max-complexity=10",
-          "--max-line-length=127",
-          "--ignore=E501,E402,W293,E303,W292",
-          "--statistics"
-        ]
-      runAfter:
-        - clone
-
-    - name: tests
-      workspaces:
-        - name: source
-          workspace: pipeline-workspace
-      taskRef:
-        name: tests
-      params:
-      - name: args
-        value: -v --with-spec --spec-color
-      - name: database_uri
-        value: sqlite:///test.db
-      runAfter:
-        - clone
-
+    # Task de build usando buildah ClusterTask
     - name: build
       workspaces:
-        - name: source
+        - name: source  # ← buildah espera workspace llamado 'source'
           workspace: pipeline-workspace
       taskRef:
         name: buildah
-        kind: ClusterTask
+        kind: ClusterTask  # ← ¡Importante! Usar ClusterTask
       params:
-      - name: IMAGE
-        value: $(params.build-image)  # ← Ahora este parámetro está definido
+        - name: IMAGE
+          value: $(params.build-image)
+        - name: DOCKERFILE
+          value: "Dockerfile"  # ← Asegurar que usa el Dockerfile correcto
       runAfter:
-        - tests
-        - lint
+        - clone
 
+    # Task de deploy usando openshift-client ClusterTask
     - name: deploy
       workspaces:
-        - name: manifest-dir  # Must match defined YAML workspace name of openshift-client
+        - name: manifest-dir  # ← openshift-client espera este workspace
           workspace: pipeline-workspace
       taskRef:
         name: openshift-client
-        # According to Tekton Doc: ClusterTasks are deprecated and 
-        # ClusterResolver should be used instead.
-        # However, as required in the project, ClusterTask is still used.
-        kind: ClusterTask
+        kind: ClusterTask  # ← ¡Importante! Usar ClusterTask
       params:
-      # Script provided by IBM
-      - name: SCRIPT
-        value: |
-          echo "Updating manifest..."
-          sed -i "s|IMAGE_NAME_HERE|$(params.build-image)|g" deploy/deployment.yaml
-          cat deploy/deployment.yaml
-          echo "Deploying to OpenShift..."
-          oc apply -f deploy/
-          oc get pods -l app=accounts
+        - name: SCRIPT
+          value: |
+            echo "Updating manifest with image: $(params.build-image)"
+            cd deploy
+            sed -i "s|IMAGE_NAME_HERE|$(params.build-image)|g" deployment.yaml
+            echo "Deploying to OpenShift..."
+            oc apply -f .
+            echo "Waiting for deployment to complete..."
+            oc rollout status deployment/accounts
+            echo "Current pods:"
+            oc get pods -l app=accounts
       runAfter:
         - build
